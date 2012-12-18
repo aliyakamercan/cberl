@@ -85,7 +85,7 @@ set(PoolName, Key, Exp, Value) ->
     set(PoolName, Key, Exp, Value, standard).
 
 %% @equiv store(PoolName, set, "", Key, Value, Exp)
--spec set(instance(), key(), integer(), value(), integer()) -> ok | {error, _}.
+-spec set(instance(), key(), integer(), value(), list()) -> ok | {error, _}.
 set(PoolName, Key, Exp, Value, TranscoderOpts) ->
     store(PoolName, set, Key, Value, TranscoderOpts, Exp, 0).
 
