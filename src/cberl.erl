@@ -143,7 +143,9 @@ decr(PoolName, Key, OffSet, Default, Exp) ->
 %%% RETRIEVAL METHODS %%%
 %%%%%%%%%%%%%%%%%%%%%%%%%
 
--spec get_and_touch(instance(), key(), integer()) -> {ok, integer(), value()} | {error, _}.
+-spec get_and_touch(instance(), key() | list(key()), integer()) -> {ok, integer(), value()} | {error, _}.
+get_and_touch(PoolName, Keys, Exp) when is_list(Keys)-> 
+    mget(PoolName, Keys, Exp);
 get_and_touch(PoolName, Key, Exp) -> 
     mget(PoolName, [Key], Exp).
 

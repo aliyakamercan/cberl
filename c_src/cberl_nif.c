@@ -130,29 +130,18 @@ NIF(cberl_nif_store)
     handle_t *  handle;
     struct libcouchbase_callback cb; 
     int operation;
-    void * key;
-    unsigned int nkey;
-    void * bytes;
-    lcb_size_t nbytes;
     lcb_uint32_t flags;
     int exp;
     lcb_cas_t cas;
 
+    ErlNifBinary key_binary;
     ErlNifBinary value_binary;
     lcb_error_t ret; 
     
     assert_badarg(enif_get_resource(env, argv[0], cberl_handle, (void **) &handle), env);        
     assert_badarg(enif_get_int(env, argv[1], &operation), env);       
-    assert_badarg(enif_get_list_length(env, argv[2], &nkey), env);       
-    nkey += 1;
-    key = (char *) malloc(nkey);
-    assert_badarg(enif_get_string(env, argv[2], key, nkey, ERL_NIF_LATIN1), env);           
-    assert_badarg(enif_inspect_iolist_as_binary(env, argv[3], &value_binary), env); 
-    
-    bytes = malloc(value_binary.size);
-    memcpy(bytes, value_binary.data, value_binary.size);
-    nbytes = value_binary.size;
-
+    assert_badarg(enif_inspect_binary(env, argv[2], &key_binary), env); 
+    assert_badarg(enif_inspect_binary(env, argv[3], &value_binary), env); 
     assert_badarg(enif_get_uint(env, argv[4], &flags), env);       
     assert_badarg(enif_get_int(env, argv[5], &exp), env);                      
     assert_badarg(enif_get_uint64(env, argv[6], (ErlNifUInt64*)&cas), env);       
@@ -163,19 +152,16 @@ NIF(cberl_nif_store)
     commands[0] = &cmd;
     memset(&cmd, 0, sizeof(cmd));
     cmd.v.v0.operation = operation;
-    cmd.v.v0.key = key;
-    cmd.v.v0.nkey = nkey;
-    cmd.v.v0.bytes = bytes;
-    cmd.v.v0.nbytes = nbytes;
+    cmd.v.v0.key = key_binary.data;
+    cmd.v.v0.nkey = key_binary.size;
+    cmd.v.v0.bytes = value_binary.data;
+    cmd.v.v0.nbytes = value_binary.size;
     cmd.v.v0.flags = flags;
     cmd.v.v0.exptime = exp;
     cmd.v.v0.cas = cas;
 
     enif_mutex_lock(handle->mutex);
     ret = lcb_store(handle->instance, &cb, 1, commands);
-    
-    free(key);
-    free(bytes);
     
     if (ret != LCB_SUCCESS) {
         enif_mutex_unlock(handle->mutex);
@@ -207,20 +193,21 @@ NIF(cberl_nif_mget)
     ERL_NIF_TERM returnValue;
     ERL_NIF_TERM tail;
     ErlNifBinary *databin;
+    ErlNifBinary *keybin;
+    ErlNifBinary key_binary;
     
     assert_badarg(enif_get_resource(env, argv[0], cberl_handle, (void **) &handle), env);      
+
     assert_badarg(enif_get_list_length(env, argv[1], &numkeys), env);       
     keys = malloc(sizeof(char*) * numkeys);
     nkeys = malloc(sizeof(size_t) * numkeys);
     currKey = malloc(sizeof(ERL_NIF_TERM));
     tail = argv[1];
-    unsigned int arglen;
     int i = 0;
     while(0 != enif_get_list_cell(env, tail, currKey, &tail)) {
-        assert_badarg(enif_get_list_length(env, *currKey, &arglen), env);       
-        nkeys[i] = arglen + 1;
-        keys[i] = malloc(sizeof(char) * nkeys[i]);
-        assert_badarg(enif_get_string(env, *currKey, keys[i], nkeys[i], ERL_NIF_LATIN1), env);           
+        assert_badarg(enif_inspect_binary(env, *currKey, &key_binary), env); 
+        nkeys[i] = key_binary.size;
+        keys[i] = key_binary.data;
         i++;
     }
     
@@ -255,26 +242,32 @@ NIF(cberl_nif_mget)
     results = malloc(sizeof(ERL_NIF_TERM) * numkeys);
     i = 0; 
     for(; i < numkeys; i++) {
+        keybin = malloc(sizeof(ErlNifBinary));
+        enif_alloc_binary(cb.ret[i]->nkey, keybin);
+        memcpy(keybin->data, cb.ret[i]->key, cb.ret[i]->nkey);
+
         if (cb.ret[i]->error == LCB_SUCCESS) {
+
             databin = malloc(sizeof(ErlNifBinary));
             enif_alloc_binary(cb.ret[i]->size, databin);
             memcpy(databin->data, cb.ret[i]->data, cb.ret[i]->size);
+            
             results[i] = enif_make_tuple4(env, 
                     enif_make_int(env, cb.ret[i]->cas), 
                     enif_make_int(env, cb.ret[i]->flag), 
-                    enif_make_string_len(env, cb.ret[i]->key, cb.ret[i]->nkey - 1, ERL_NIF_LATIN1),
+                    enif_make_binary(env, keybin),
                     enif_make_binary(env, databin));
             free(cb.ret[i]->data);
             free(databin);
         } else {
             results[i] = enif_make_tuple2(env, 
-                    enif_make_string_len(env, cb.ret[i]->key, cb.ret[i]->nkey - 1, ERL_NIF_LATIN1),
+                    enif_make_binary(env, keybin),
                     return_lcb_error(env, cb.ret[i]->error));
         }
+        free(keybin);
         free(cb.ret[i]->key);
         free(cb.ret[i]);
-        free(keys[i]);
-	free((lcb_get_cmd_t*) commands[i]);
+	    free((lcb_get_cmd_t*) commands[i]);
     }
     returnValue = enif_make_list_from_array(env, results, numkeys);
     
@@ -290,32 +283,28 @@ NIF(cberl_nif_mget)
 NIF(cberl_nif_getl) {
     handle_t * handle;
     struct libcouchbase_callback cb; 
-    void * key;
-    unsigned int nkey;
     int exp;
+
+    ErlNifBinary key_binary;
 
     lcb_error_t ret; 
     
     assert_badarg(enif_get_resource(env, argv[0], cberl_handle, (void **) &handle), env);      
-    assert_badarg(enif_get_list_length(env, argv[1], &nkey), env);       
-    nkey += 1;
-    key = (char *) malloc(nkey);
-    assert_badarg(enif_get_string(env, argv[1], key, nkey, ERL_NIF_LATIN1), env);           
+    assert_badarg(enif_inspect_binary(env, argv[1], &key_binary), env); 
     
-    assert_badarg(enif_get_int(env, argv[3], &exp), env);       
+    assert_badarg(enif_get_int(env, argv[2], &exp), env);       
     enif_mutex_lock(handle->mutex);
 
     lcb_get_cmd_t cmd;
     const lcb_get_cmd_t *commands[1];
     commands[0] = &cmd;
     memset(&cmd, 0, sizeof(cmd));
-    cmd.v.v0.key = key;
-    cmd.v.v0.nkey = nkey;
+    cmd.v.v0.key = key_binary.data;
+    cmd.v.v0.nkey = key_binary.size;
     cmd.v.v0.exptime = exp;
     cmd.v.v0.lock = 1;
     ret = lcb_get(handle->instance, &cb, 1, commands);
  
-    free(key);
     if (ret != LCB_SUCCESS) {
         enif_mutex_unlock(handle->mutex); 
         return return_lcb_error(env, ret);
@@ -334,30 +323,25 @@ NIF(cberl_nif_unlock)
 {
     handle_t * handle;
     struct libcouchbase_callback cb; 
-    void * key;
-    unsigned int nkey;
     int cas;
+
+    ErlNifBinary key_binary;
 
     lcb_error_t ret; //for checking responses
     
     assert_badarg(enif_get_resource(env, argv[0], cberl_handle, (void **) &handle), env);      
-    assert_badarg(enif_get_list_length(env, argv[1], &nkey), env);       
-    nkey += 1;
-    key = (char *) malloc(nkey);
-    assert_badarg(enif_get_string(env, argv[1], key, nkey, ERL_NIF_LATIN1), env);           
     
+    assert_badarg(enif_inspect_binary(env, argv[1], &key_binary), env); 
     assert_badarg(enif_get_int(env, argv[2], &cas), env);       
     enif_mutex_lock(handle->mutex);
 
     lcb_unlock_cmd_t unlock;
     memset(&unlock, 0, sizeof(unlock));
-    unlock.v.v0.key = key;
-    unlock.v.v0.nkey = nkey;
+    unlock.v.v0.key = key_binary.data;
+    unlock.v.v0.nkey = key_binary.size;
     unlock.v.v0.cas = cas;
     const lcb_unlock_cmd_t* commands[] = { &unlock };
     ret = lcb_unlock(handle->instance, &cb, 1, commands);
-
-    free(key);
 
     if (ret != LCB_SUCCESS) {
         enif_mutex_unlock(handle->mutex); 
@@ -379,7 +363,7 @@ NIF(cberl_nif_mtouch)
     unsigned int numkeys;
     void** keys;
     size_t* nkeys;
-    int64_t *exp;
+    long *exp;
 
     lcb_error_t ret; //for checking responses
     
@@ -387,8 +371,8 @@ NIF(cberl_nif_mtouch)
     ERL_NIF_TERM* currKey;
     ERL_NIF_TERM returnValue;
     ERL_NIF_TERM tail;
-    
-    unsigned int arglen;
+    ErlNifBinary *keybin;
+    ErlNifBinary key_binary;
     
     assert_badarg(enif_get_resource(env, argv[0], cberl_handle, (void **) &handle), env);      
     assert_badarg(enif_get_list_length(env, argv[1], &numkeys), env);       
@@ -398,10 +382,9 @@ NIF(cberl_nif_mtouch)
     tail = argv[1];
     int i = 0;
     while(0 != enif_get_list_cell(env, tail, currKey, &tail)) {
-        assert_badarg(enif_get_list_length(env, *currKey, &arglen), env);       
-        nkeys[i] = arglen + 1;
-        keys[i] = malloc(sizeof(char) * nkeys[i]);
-        assert_badarg(enif_get_string(env, *currKey, keys[i], nkeys[i], ERL_NIF_LATIN1), env); 
+        assert_badarg(enif_inspect_binary(env, *currKey, &key_binary), env); 
+        nkeys[i] = key_binary.size;
+        keys[i] = key_binary.data;
         i++;
     } 
     
@@ -409,7 +392,7 @@ NIF(cberl_nif_mtouch)
     tail = argv[2];
     i = 0;
     while(0 != enif_get_list_cell(env, tail, currKey, &tail)) {
-        assert_badarg(enif_get_int64(env, *currKey, &exp[i]), env);
+        assert_badarg(enif_get_long(env, *currKey, &exp[i]), env);
         i++;
     }
 
@@ -441,19 +424,24 @@ NIF(cberl_nif_mtouch)
     results = malloc(sizeof(ERL_NIF_TERM) * numkeys);
     i = 0; 
     for(; i < numkeys; i++) {
+        keybin = malloc(sizeof(ErlNifBinary));
+        enif_alloc_binary(cb.ret[i]->nkey, keybin);
+        memcpy(keybin->data, cb.ret[i]->key, cb.ret[i]->nkey);
+
         if (cb.ret[i]->error == LCB_SUCCESS) {
             results[i] = enif_make_tuple2(env,
-                    enif_make_string_len(env, cb.ret[i]->key, cb.ret[i]->nkey - 1, ERL_NIF_LATIN1),
+                    enif_make_binary(env, keybin),
                     a_ok);
         } else {
             results[i] = enif_make_tuple2(env,
-                    enif_make_string_len(env, cb.ret[i]->key, cb.ret[i]->nkey - 1, ERL_NIF_LATIN1),
+                    enif_make_binary(env, keybin),
                     return_lcb_error(env, cb.ret[i]->error));
         }
         free(cb.ret[i]->key);
         free(cb.ret[i]);
         free(keys[i]);
-	free((lcb_touch_cmd_t*) commands[i]);
+        free(keybin);
+	    free((lcb_touch_cmd_t*) commands[i]);
     }
     returnValue = enif_make_list_from_array(env, results, numkeys);
 
@@ -469,20 +457,16 @@ NIF(cberl_nif_mtouch)
 NIF(cberl_nif_arithmetic) {
     handle_t * handle;
     struct libcouchbase_callback cb; 
-    void * key;
-    unsigned int nkey;
     int64_t delta;
     uint64_t exp;
     int create;
     uint64_t initial; 
 
+    ErlNifBinary key_binary;
     lcb_error_t ret; //for checking responses
     
     assert_badarg(enif_get_resource(env, argv[0], cberl_handle, (void **) &handle), env);      
-    assert_badarg(enif_get_list_length(env, argv[1], &nkey), env);       
-    nkey += 1;
-    key = (char *) malloc(nkey);
-    assert_badarg(enif_get_string(env, argv[1], key, nkey, ERL_NIF_LATIN1), env);       
+    assert_badarg(enif_inspect_binary(env, argv[1], &key_binary), env); 
     assert_badarg(enif_get_int64(env, argv[2], (ErlNifSInt64*)&delta), env);        
     assert_badarg(enif_get_uint64(env, argv[3], (ErlNifUInt64 *)&exp), env);       
     assert_badarg(enif_get_int(env, argv[4], &create), env);   
@@ -493,14 +477,13 @@ NIF(cberl_nif_arithmetic) {
     const lcb_arithmetic_cmd_t* commands[1];
     commands[0] = &arithmetic;
     memset(&arithmetic, 0, sizeof(arithmetic));
-    arithmetic.v.v0.key = key;
-    arithmetic.v.v0.nkey = nkey;
+    arithmetic.v.v0.key = key_binary.data;
+    arithmetic.v.v0.nkey = key_binary.size;
     arithmetic.v.v0.initial = initial;
     arithmetic.v.v0.create = create;
     arithmetic.v.v0.delta = delta;
     ret = lcb_arithmetic(handle->instance, &cb, 1, commands);
  
-    free(key);
     if (ret != LCB_SUCCESS) {
         enif_mutex_unlock(handle->mutex); 
         return return_lcb_error(env, ret);
@@ -516,18 +499,14 @@ NIF(cberl_nif_arithmetic) {
 NIF(cberl_nif_remove) {
     handle_t * handle;
     struct libcouchbase_callback cb; 
-    void * key;
-    unsigned int nkey;
     int cas;
+
+    ErlNifBinary key_binary;
 
     lcb_error_t ret; //for checking responses
     
     assert_badarg(enif_get_resource(env, argv[0], cberl_handle, (void **) &handle), env);      
-    assert_badarg(enif_get_list_length(env, argv[1], &nkey), env);       
-    nkey += 1;
-    key = (char *) malloc(nkey);
-    assert_badarg(enif_get_string(env, argv[1], key, nkey, ERL_NIF_LATIN1), env);           
-    
+    assert_badarg(enif_inspect_binary(env, argv[1], &key_binary), env); 
     assert_badarg(enif_get_int(env, argv[2], &cas), env);       
     enif_mutex_lock(handle->mutex); 
     
@@ -535,13 +514,12 @@ NIF(cberl_nif_remove) {
     const lcb_remove_cmd_t* commands[1];
     commands[0] = &remove;
     memset(&remove, 0, sizeof(remove));
-    remove.v.v0.key = key;
-    remove.v.v0.nkey = nkey;
+    remove.v.v0.key = key_binary.data;
+    remove.v.v0.nkey = key_binary.size;
     remove.v.v0.cas = cas;
 
     ret = lcb_remove(handle->instance, &cb, 1, commands);
 
-    free(key);
     if (ret != LCB_SUCCESS) {
         enif_mutex_unlock(handle->mutex); 
         return return_lcb_error(env, ret);
