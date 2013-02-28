@@ -253,7 +253,7 @@ NIF(cberl_nif_mget)
             memcpy(databin->data, cb.ret[i]->data, cb.ret[i]->size);
             
             results[i] = enif_make_tuple4(env, 
-                    enif_make_int(env, cb.ret[i]->cas), 
+                    enif_make_uint64(env, cb.ret[i]->cas), 
                     enif_make_int(env, cb.ret[i]->flag), 
                     enif_make_binary(env, keybin),
                     enif_make_binary(env, databin));
