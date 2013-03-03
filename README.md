@@ -37,16 +37,17 @@ Example
 
 Make sure you have couchbase running on localhost or use cberl:new(Host) instead.
 
+    $ erl -pa ebin deps/*/ebin
     %% create a connection pool  of 5 connections named cberl_default
     %% you can provide more argument like host, username, password, 
     %% bucket and transcoder - look at [cberl.erl](https://github.com/aliyakamercan/cberl/blob/master/src/cberl.erl) for more detail 
     cberl:start_link(cberl_default, 5).
     {ok, <0.33.0>}
     %% Poolname, Key, Expire - 0 for infinity, Value
-    cberl:set(cberl_default, "fkey", 0, "cberl").
+    cberl:set(cberl_default, <<"fkey">>, 0, <<"cberl">>).
     ok
-    cberl:get(cberl_default, "fkey").
-    {"fkey", ReturnedCasValue, "cberl"}
+    cberl:get(cberl_default, <<"fkey">>).
+    {<<"fkey">>, ReturnedCasValue, <<"cberl">>}
 
 
 For more information on all the functions -> ./rebar doc (most of documentation is out of date right now)
